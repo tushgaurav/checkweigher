@@ -1,0 +1,12 @@
+.git
+.devtools
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+web/dist
+backend/var
+backend/config.yaml
+deploy/.env
+deploy/config.yaml

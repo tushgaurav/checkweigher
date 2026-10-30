@@ -1,0 +1,54 @@
+[project]
+name = "checkweigher"
+version = "0.1.0"
+description = "Data collection, KPI engine and API for A&D AD-4412/4413-CW checkweighers"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "psycopg[binary]",
+    "psycopg-pool",
+    "pymodbus",
+    "pyserial",
+    "openpyxl",
+    "pyyaml",
+    "pydantic",
+    "tzdata",
+]
+
+[project.scripts]
+cw-collector = "checkweigher.collector.__main__:main"
+cw-api = "checkweigher.api.__main__:main"
+cw-sim = "checkweigher.simulator.__main__:main"
+cw-migrate = "checkweigher.db.migrate:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/checkweigher"]
+
+[tool.uv]
+# Supply-chain guard: never resolve packages published in the last 7 days.
+exclude-newer = "2026-10-23T00:00:00Z"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]

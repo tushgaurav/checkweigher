@@ -1,0 +1,52 @@
+# Checkweigher dashboard configuration (shared by cw-collector, cw-api, cw-migrate).
+# Copy to config.yaml and adjust. Environment overrides: CW_CONFIG, CW_DATABASE_URL, CW_WEB_DIST.
+
+plant:
+  name: "Plant 1"
+  timezone: "Asia/Kolkata"
+
+database:
+  url: "postgresql://cw:cw@localhost:5432/checkweigher"
+
+collector:
+  spool_dir: "var/spool"        # records are spooled here if the database is unreachable
+  status_interval_s: 2
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+
+# Optional. When present, replaces the shift table on collector start.
+# A shift whose end is before its start crosses midnight and belongs to the date it started.
+shifts:
+  - { code: "A", name: "Shift A", start: "06:00", end: "14:00" }
+  - { code: "B", name: "Shift B", start: "14:00", end: "22:00" }
+  - { code: "C", name: "Shift C", start: "22:00", end: "06:00" }
+
+machines:
+  - id: 1
+    code: "CW-01"
+    name: "Checkweigher 1"
+    # serial+modbus : every product from the serial result output, Modbus for product
+    #                 settings and counter reconciliation (recommended)
+    # serial        : serial only (no product/target context, no reconciliation)
+    # modbus        : Modbus polling only (exact counts, sampled weights)
+    mode: "serial+modbus"
+    unit: "g"                   # weighing unit set on the indicator (g | kg)
+    serial:
+      # Indicator: Connection > RS-232C Port = "Weighing Result", Output mode = "Cyclic Print"
+      url: "/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1:1.0-port0"   # or /dev/ttyUSB0, COM3, socket://host:port
+      baudrate: 9600
+      bytesize: 8
+      parity: "N"
+      stopbits: 1
+    modbus:
+      # Indicator: Connection > Modbus = "Modbus / TCP" (restart the indicator after changing)
+      host: "192.168.1.50"
+      port: 502
+      device_id: 1
+      context_interval_s: 5     # product number / target / limits
+      reconcile_interval_s: 30  # summary counters vs received records
+      poll_interval_s: 0.2      # modbus-only mode
+      word_order: "little"      # manual §10.3.1 example: low word first
+      value_encoding: "scaled_int"   # verify on site: scaled_int | float32

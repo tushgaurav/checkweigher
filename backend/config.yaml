@@ -1,0 +1,24 @@
+# Local development: portable Postgres from scripts/dev-db.ps1 + `cw-sim run`.
+plant:
+  name: "Dev Plant"
+  timezone: "Asia/Kolkata"
+
+database:
+  url: "postgresql://cw:cw@localhost:5433/checkweigher"
+
+collector:
+  spool_dir: "var/spool"
+
+machines:
+  - id: 1
+    code: "CW-01"
+    name: "Checkweigher 1"
+    mode: "serial+modbus"
+    unit: "g"
+    serial:
+      url: "socket://127.0.0.1:7001"
+    modbus:
+      host: "127.0.0.1"
+      port: 5020
+      context_interval_s: 5
+      reconcile_interval_s: 15

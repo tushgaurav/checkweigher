@@ -1,0 +1,29 @@
+# Production config for the Docker deployment. The database URL is injected via CW_DATABASE_URL.
+# See backend/config.example.yaml for every option.
+plant:
+  name: "Plant 1"
+  timezone: "Asia/Kolkata"
+
+collector:
+  spool_dir: "/data/spool"
+
+shifts:
+  - { code: "A", name: "Shift A", start: "06:00", end: "14:00" }
+  - { code: "B", name: "Shift B", start: "14:00", end: "22:00" }
+  - { code: "C", name: "Shift C", start: "22:00", end: "06:00" }
+
+machines:
+  - id: 1
+    code: "CW-01"
+    name: "Checkweigher 1"
+    mode: "serial+modbus"
+    unit: "g"
+    serial:
+      url: "/dev/cw01"            # container path from the `devices:` mapping in docker-compose.yml
+      baudrate: 9600
+    modbus:
+      host: "192.168.1.50"
+      port: 502
+      device_id: 1
+      word_order: "little"
+      value_encoding: "scaled_int"
