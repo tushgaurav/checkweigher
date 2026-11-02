@@ -1,95 +1,139 @@
-import { useEffect, useState } from 'react'
+import { Maximize, Minimize, Moon, Sun } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
 import { Dot } from '@/components/panel'
 import { fmtAgo, fmtG } from '@/lib/format'
-import { colorOf } from '@/lib/judgement'
+import { useFullscreen } from '@/lib/fullscreen'
 import { useLive } from '@/lib/use-live'
 import { useMeta } from '@/lib/queries'
+import { setTheme, useTheme, type Theme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
-function Clock({ tz }: { tz?: string }) {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(t)
-  }, [])
+// Status lamps on the brand bar need more luminance than the in-panel tokens.
+const LAMP_ON = 'oklch(0.86 0.18 150)'
+const LAMP_OFF = 'oklch(0.76 0.16 25)'
+
+function LogoMark() {
   return (
-    <span className="num text-xs text-muted-foreground">
-      {now.toLocaleTimeString('en-IN', { hour12: false, timeZone: tz })}
-    </span>
+    <svg viewBox="0 0 32 32" className="size-7 shrink-0" aria-hidden>
+      <rect width="32" height="32" rx="4" fill="var(--brand-foreground)" />
+      <rect x="9" y="6" width="14" height="8" rx="1" fill="none" stroke="var(--brand)" strokeWidth="2" />
+      <path d="M16 14v4" stroke="var(--brand)" strokeWidth="2" />
+      <path d="M5 21h22" stroke="var(--brand)" strokeWidth="3" strokeLinecap="round" />
+      <path d="M9 22v5M23 22v5" stroke="var(--brand)" strokeWidth="2" />
+    </svg>
   )
 }
 
-function MachineChips() {
-  const { data: meta } = useMeta()
-  const { status, connected } = useLive()
+function Tab({ to, end, title, children }: { to: string; end?: boolean; title?: string; children: ReactNode }) {
   const location = useLocation()
   return (
-    <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
+    <NavLink
+      to={{ pathname: to, search: location.search }}
+      end={end}
+      title={title}
+      className={({ isActive }) =>
+        cn(
+          'relative flex h-12 shrink-0 items-center gap-2 px-3 text-[12.5px] font-medium text-brand-foreground/75 transition-colors hover:bg-white/8 hover:text-brand-foreground',
+          isActive &&
+            'bg-white/12 text-brand-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-brand-foreground',
+        )
+      }
+    >
+      {children}
+    </NavLink>
+  )
+}
+
+function MachineTabs() {
+  const { data: meta } = useMeta()
+  const { status, connected } = useLive()
+  return (
+    <>
       {meta?.machines.map((m) => {
         const s = status[m.id]
         const online = !!s?.online
         return (
-          <NavLink
+          <Tab
             key={m.id}
-            to={{ pathname: `/machines/${m.id}`, search: location.search }}
-            className={({ isActive }) =>
-              cn(
-                'press flex shrink-0 items-center gap-2 border border-border px-2.5 py-1 text-xs transition-colors hover:bg-accent',
-                isActive && 'border-signal/50 bg-accent',
-              )
-            }
+            to={`/machines/${m.id}`}
             title={s ? `serial ${s.serial_state} · modbus ${s.modbus_state} · updated ${fmtAgo(s.updated_at)}` : 'no status'}
           >
-            <Dot color={online ? 'var(--ok)' : 'var(--reject)'} live={online && connected} />
-            <span className="font-medium">{m.code}</span>
-            <span className="num text-muted-foreground" style={{ color: s ? colorOf(s.last_judgement) : undefined }}>
-              {s?.last_weight_g != null ? fmtG(s.last_weight_g) : '—'}
-            </span>
-          </NavLink>
+            <Dot color={online ? LAMP_ON : LAMP_OFF} live={online && connected} />
+            {m.code}
+            <span className="num font-normal opacity-75">{s?.last_weight_g != null ? fmtG(s.last_weight_g) : '—'}</span>
+          </Tab>
         )
       })}
+    </>
+  )
+}
+
+const barButton =
+  'press grid size-8 place-items-center text-brand-foreground/80 transition-colors hover:bg-white/10 hover:text-brand-foreground [&_svg]:size-4'
+
+function ThemeSwitch() {
+  const theme = useTheme()
+  const options: [Theme, string, ReactNode][] = [
+    ['light', 'Light theme', <Sun key="sun" />],
+    ['dark', 'Dark theme', <Moon key="moon" />],
+  ]
+  return (
+    <div role="group" aria-label="Colour theme" className="flex border border-white/20">
+      {options.map(([value, label, icon]) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={theme === value}
+          aria-label={label}
+          title={label}
+          onClick={() => setTheme(value)}
+          className={cn(barButton, 'size-7', theme === value && 'bg-white/18 text-brand-foreground')}
+        >
+          {icon}
+        </button>
+      ))}
     </div>
   )
 }
 
+function FullscreenButton() {
+  const { active, toggle, supported } = useFullscreen()
+  if (!supported) return null
+  const label = active ? 'Exit full screen' : 'Full screen'
+  return (
+    <button type="button" onClick={toggle} title={label} aria-label={label} className={barButton}>
+      {active ? <Minimize /> : <Maximize />}
+    </button>
+  )
+}
+
 export function AppShell() {
-  const { data: meta } = useMeta()
   const location = useLocation()
   return (
     <div className="flex min-h-svh flex-col">
-      <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-6 px-4 md:px-6">
-          <NavLink to={{ pathname: '/', search: location.search }} className="flex shrink-0 items-baseline gap-2">
-            <span className="signage text-sm text-foreground">Checkweigher</span>
-            <span className="signage text-[10px] text-signal">QA</span>
+      <header className="sticky top-0 z-30 bg-brand text-brand-foreground shadow-sm">
+        <div className="mx-auto flex h-12 max-w-[1600px] items-center gap-4 px-4 md:px-6">
+          <NavLink to={{ pathname: '/', search: location.search }} className="flex shrink-0 items-center gap-2.5">
+            <LogoMark />
+            <span className="hidden text-[15px] leading-none font-bold tracking-tight sm:inline">
+              Checkweigher <span className="font-medium opacity-70">QA</span>
+            </span>
           </NavLink>
-          <nav className="hidden items-center gap-1 text-xs sm:flex">
-            <NavLink
-              to={{ pathname: '/', search: location.search }}
-              end
-              className={({ isActive }) =>
-                cn('px-2 py-1 text-muted-foreground transition-colors hover:text-foreground', isActive && 'text-foreground')
-              }
-            >
+          <span className="hidden h-6 w-px bg-white/20 sm:block" />
+          <nav className="flex min-w-0 flex-1 items-center overflow-x-auto">
+            <Tab to="/" end>
               Overview
-            </NavLink>
+            </Tab>
+            <MachineTabs />
           </nav>
-          <div className="min-w-0 flex-1">
-            <MachineChips />
-          </div>
-          <div className="hidden shrink-0 items-center gap-3 md:flex">
-            <span className="text-xs text-muted-foreground">{meta?.plant_name}</span>
-            {meta && (
-              <span className="border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                Shift <span className="text-foreground">{meta.current_shift}</span>
-              </span>
-            )}
-            <Clock tz={meta?.timezone} />
+          <div className="flex shrink-0 items-center gap-2">
+            <ThemeSwitch />
+            <FullscreenButton />
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 md:px-6">
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4 md:px-6">
         <Outlet />
       </main>
     </div>

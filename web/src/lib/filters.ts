@@ -17,6 +17,18 @@ export const PRESETS: Preset[] = [
   { key: 'month', label: 'This month', range: (t) => [startOfMonth(t), t] },
 ]
 
+export function rangeLabel(from: string, to: string) {
+  const f = parseISO(from)
+  if (from === to) return format(f, 'EEE d MMM yyyy')
+  return `${format(f, 'd MMM')} – ${format(parseISO(to), 'd MMM yyyy')}`
+}
+
+export const activePreset = (from: string, to: string, today: Date) =>
+  PRESETS.find((p) => {
+    const [a, b] = p.range(today)
+    return iso(a) === from && iso(b) === to
+  })
+
 /** Dashboard filters live in the URL so views can be bookmarked and shared. */
 export function useFilters(machineOverride?: number) {
   const [params, setParams] = useSearchParams()
@@ -61,5 +73,9 @@ export function useFilters(machineOverride?: number) {
 
   const includesToday = filters.to >= today
   const todayDate = parseISO(today)
-  return { filters, update, today, todayDate, includesToday }
+  // Data scope shown under every panel title, e.g. "Today · All shifts".
+  const scope = `${activePreset(filters.from, filters.to, todayDate)?.label ?? rangeLabel(filters.from, filters.to)} · ${
+    filters.shift ? `Shift ${filters.shift}` : 'All shifts'
+  }`
+  return { filters, update, today, todayDate, includesToday, scope }
 }

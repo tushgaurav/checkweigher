@@ -29,6 +29,11 @@ indicator ──RS-232C "Weighing Result / Cyclic Print"──> collector ──
 - `web/` - React 19 + Vite 8 + Tailwind 4 + shadcn (radix, "lyra" style) + TanStack Query + Recharts. Filters live
   in URL search params. `src/lib/api-types.ts` is generated from the API's OpenAPI schema (`npm run gen:api`).
   Single EventSource (`/api/live`) for machine status + new weighings.
+  Light theme is the default; the header switch toggles `.dark` on `<html>` (persisted in localStorage `cw-theme`,
+  applied pre-paint by the inline script in `index.html`). All colours are CSS vars in `src/index.css` (`--brand` =
+  header bar, judgement tones `--ok/--over/--under/--feed/--reject`, `--signal` = target/EGA). Chart legends and
+  limit-line definitions live in `src/lib/series.ts`; every dashboard card is a `Panel` (title, data-scope subtitle,
+  CSV / full-screen tools, legend + stats footer).
 - `deploy/` - Dockerfile (multi-arch) + docker-compose.yml (timescaledb:2.31.0-pg17, migrate, collector, api).
 
 ## Local development (Windows, no Docker)

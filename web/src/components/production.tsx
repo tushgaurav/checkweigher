@@ -1,20 +1,20 @@
-import { Panel, Stat } from '@/components/panel'
+import { FooterStats, JudgementBadge, Panel, Stat, Swatch } from '@/components/panel'
 import type { Completeness, KPIs, LastWeight } from '@/lib/api'
-import { fmtAgo, fmtG, fmtInt, fmtKg, fmtNum, fmtPct, fmtTime } from '@/lib/format'
+import { fmtAgo, fmtG, fmtInt, fmtNum, fmtPct, fmtTime } from '@/lib/format'
 import { colorOf } from '@/lib/judgement'
 
 type Segment = { key: string; label: string; value: number; color: string }
 
-/** Totals + a single stacked bar of where every judged product went. */
+/** Where every judged product went: one stacked bar + a count/share table. */
 export function ProductionPanel({
   k,
   completeness,
-  i,
+  scope,
   className,
 }: {
   k: KPIs | undefined
   completeness?: Completeness | null
-  i: number
+  scope: string
   className?: string
 }) {
   const total = k?.total ?? 0
@@ -30,8 +30,8 @@ export function ProductionPanel({
 
   return (
     <Panel
-      i={i}
-      title="Production"
+      title="Judgement breakdown"
+      subtitle={scope}
       className={className}
       action={
         completeness?.pct != null && (
@@ -39,27 +39,27 @@ export function ProductionPanel({
             className="num text-[11px] text-muted-foreground"
             title={`${fmtInt(completeness.received)} of ${fmtInt(completeness.expected)} products counted by the indicator were received`}
           >
-            data capture{' '}
-            <span style={{ color: completeness.pct >= 99.5 ? 'var(--ok)' : 'var(--over)' }}>
+            Data capture{' '}
+            <span className="font-semibold" style={{ color: completeness.pct >= 99.5 ? 'var(--ok)' : 'var(--over)' }}>
               {fmtPct(completeness.pct, 1)}
             </span>
           </span>
         )
       }
+      footer={
+        k && (
+          <FooterStats
+            items={[
+              ['Detect two', fmtInt(k.detect_two)],
+              ['Unsplit', fmtInt(k.unsplit)],
+              ['Metal', fmtInt(k.metal)],
+              ['External', fmtInt(k.external)],
+            ]}
+          />
+        )
+      }
     >
-      <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
-        <Stat label="Products judged" value={fmtInt(k?.total)} sub={`${fmtInt(k?.weighed)} weighed`} />
-        <Stat label="Passed" value={fmtInt(k?.passed)} tone="var(--ok)" sub={fmtKg(k?.passed_kg)} />
-        <Stat label="Total quantity" value={fmtNum(k?.quantity_kg, 1)} sub="kg weighed" />
-        <Stat
-          label="Rejected"
-          value={fmtInt(k?.rejected)}
-          tone="var(--reject)"
-          sub={k?.rejected_pct != null ? fmtPct(k.rejected_pct) : undefined}
-        />
-      </div>
-
-      <div className="mt-5 flex h-2.5 w-full overflow-hidden bg-muted">
+      <div className="flex h-3 w-full overflow-hidden rounded-sm bg-muted">
         {total > 0 &&
           segments
             .filter((s) => s.value > 0)
@@ -73,24 +73,24 @@ export function ProductionPanel({
             ))}
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-5">
-        {segments.map((s) => (
-          <div key={s.key} className="flex items-center gap-2 text-[11px]">
-            <span className="size-2 shrink-0" style={{ backgroundColor: s.color }} />
-            <span className="truncate text-muted-foreground">{s.label}</span>
-            <span className="num ml-auto">{fmtInt(s.value)}</span>
-          </div>
-        ))}
-      </div>
-
-      {k && (
-        <div className="num mt-4 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border pt-3 text-[11px] text-muted-foreground sm:grid-cols-4">
-          <span>Detect two {fmtInt(k.detect_two)}</span>
-          <span>Unsplit {fmtInt(k.unsplit)}</span>
-          <span>Feeding err {fmtPct(k.feeding_error_pct)}</span>
-          <span>Metal {fmtInt(k.metal)}</span>
-        </div>
-      )}
+      <table className="mt-3 w-full text-[12px]">
+        <tbody>
+          {segments.map((s) => (
+            <tr key={s.key} className="border-b border-border last:border-0">
+              <td className="py-1.5">
+                <span className="flex items-center gap-2">
+                  <Swatch color={s.color} />
+                  {s.label}
+                </span>
+              </td>
+              <td className="num py-1.5 text-right font-semibold">{fmtInt(s.value)}</td>
+              <td className="num w-20 py-1.5 text-right text-muted-foreground">
+                {total ? fmtPct((s.value / total) * 100) : '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Panel>
   )
 }
@@ -99,45 +99,49 @@ export function StatsPanel({
   k,
   last,
   tz,
-  i,
+  scope,
   productCount = 1,
   className,
 }: {
   k: KPIs | undefined
   last: LastWeight | null | undefined
   tz?: string
-  i: number
+  scope: string
   productCount?: number
   className?: string
 }) {
   return (
     <Panel
-      i={i}
       title="Statistics"
+      subtitle={scope}
       className={className}
       action={
         productCount > 1 && (
-          <span className="text-[11px] text-over" title="Mean, median and mode span different targets. Filter one product.">
+          <span
+            className="rounded-sm bg-over/12 px-1.5 py-0.5 text-[11px] font-medium text-over"
+            title="Mean, median and mode span different targets. Filter one product."
+          >
             {productCount} products mixed
           </span>
         )
       }
     >
-      <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
+      <div className="flex items-end justify-between gap-4 rounded-sm bg-muted px-3 py-3">
         <div className="min-w-0">
-          <div className="text-[11px] tracking-wide text-muted-foreground uppercase">Last weight</div>
-          <div className="readout mt-1 text-[2.6rem] leading-none" style={{ color: colorOf(last?.judgement) }}>
-            {last?.weight_g != null ? fmtNum(last.weight_g, 1) : '—'}
-            <span className="num ml-1.5 text-sm text-muted-foreground">g</span>
+          <div className="text-[11px] text-muted-foreground">Last weight</div>
+          <div className="mt-1 flex items-baseline gap-1">
+            <span className="readout text-[34px] leading-none" style={{ color: colorOf(last?.judgement) }}>
+              {last?.weight_g != null ? fmtNum(last.weight_g, 1) : '—'}
+            </span>
+            <span className="text-sm font-medium text-muted-foreground">g</span>
           </div>
         </div>
         {last && (
-          <div className="num text-right text-[11px] text-muted-foreground">
-            <div className="text-foreground" style={{ color: colorOf(last.judgement) }}>
-              {last.judgement}
-            </div>
-            <div>{fmtTime(last.ts, tz)}</div>
-            <div>{fmtAgo(last.ts)}</div>
+          <div className="num flex flex-col items-end gap-1 text-[11px] text-muted-foreground">
+            <JudgementBadge code={last.judgement} />
+            <span>
+              {fmtTime(last.ts, tz)} · {fmtAgo(last.ts)}
+            </span>
           </div>
         )}
       </div>
