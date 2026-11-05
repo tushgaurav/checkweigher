@@ -37,6 +37,10 @@ machines:
       device_id: 1
       word_order: "little"
       value_encoding: "scaled_int"
+      # Gentler than the 0.2 s / 2 s defaults: the indicator occasionally answers late
+      # ("received pdu without a corresponding request" in the collector log).
+      poll_interval_s: 0.5
+      timeout_s: 3.0
       # This firmware shifts the register blocks (manual: 190 / 282 / 619).
       summary_address: 216
       # IR 214 is the candidate last weighing result. Verify first with:

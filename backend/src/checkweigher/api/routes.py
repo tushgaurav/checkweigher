@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+import logging
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -18,6 +19,9 @@ from checkweigher.shifts import Shift, ShiftResolver
 
 router = APIRouter(prefix="/api")
 FiltersDep = Annotated[Filters, Depends(get_filters)]
+log = logging.getLogger("cw.api")
+# Aware: a naive epoch converted with .astimezone() raises OSError on Windows east of UTC.
+EPOCH = datetime.fromtimestamp(0, UTC)
 
 
 async def refresh_shifts(request: Request) -> list[Shift]:
@@ -114,13 +118,14 @@ async def live(request: Request) -> StreamingResponse:
 
     async def stream():
         since: datetime | None = None
+        last_error: str | None = None
         while not await request.is_disconnected():
             try:
                 async with pool.connection() as conn:
                     status_rows = await data.statuses(conn)
                     if since is None:
                         rows = await data.fetch(conn, "SELECT max(ts) AS ts FROM weighing")
-                        since = rows[0]["ts"] or datetime.fromtimestamp(0).astimezone()
+                        since = rows[0]["ts"] or EPOCH
                     new = await data.fetch(conn, f"SELECT {data.WEIGHING_COLS} FROM weighing WHERE ts > %s "
                                                  "ORDER BY ts LIMIT 500", (since,))
                 if new:
@@ -128,6 +133,10 @@ async def live(request: Request) -> StreamingResponse:
                 payload = {"status": status_rows, "weighings": [S.Weighing(**r) for r in new]}
                 yield f"event: tick\ndata: {json.dumps(jsonable_encoder(payload))}\n\n"
             except Exception as e:
+                # The browser treats this as a lost connection, so make the cause visible in the API log.
+                if str(e) != last_error:
+                    log.warning("live stream failed: %r", e)
+                    last_error = str(e)
                 yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
             await asyncio.sleep(1.0)
 
