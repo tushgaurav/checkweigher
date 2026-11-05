@@ -54,6 +54,11 @@ cd ..\web; npm install; npm run dev                                  # http://lo
 - psycopg async needs a selector event loop on Windows; entry points pass `loop_factory=asyncio.SelectorEventLoop`.
 - `scripts/screenshot.py` (run with `uv run --no-sync --with playwright python ../scripts/screenshot.py URL out.png`
   from `backend/`) screenshots pages with the installed Chrome and prints console errors + API timings.
+- `scripts/probe.py` (run with `uv run --no-sync python ../scripts/probe.py ports|serial|serial-scan|modbus ...` from
+  `backend/`) is the read-only on-site probe: timestamped serial capture with hex + parse result, baud/format scan, and
+  Modbus dumps decoded with every word order x value encoding (`--watch` for counter deltas, `--out` to log). Use it to
+  settle the open device questions (encoding, word order, absolute vs offset limits, TD/US numbering) before
+  editing `config.yaml`. Works against the simulator (`socket://127.0.0.1:7001`, `modbus 127.0.0.1 --port 5020`).
 
 ## Verification
 
