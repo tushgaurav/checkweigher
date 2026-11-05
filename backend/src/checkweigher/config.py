@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from checkweigher.device import registers as R
+
 MachineMode = Literal["serial+modbus", "serial", "modbus"]
 
 
@@ -60,6 +62,23 @@ class ModbusConfig(BaseModel):
     # Manual does not state how 4-byte decimal values are encoded; assume an
     # integer scaled by the product decimal point (holding register 619).
     value_encoding: Literal["scaled_int", "float32"] = "scaled_int"
+    # Block addresses (manual Tables 18/19 by default). Some firmware inserts registers and shifts them;
+    # find them with scripts/probe.py. null = not available on this firmware.
+    summary_address: int = Field(R.IR_ALL_TOTAL, ge=1)
+    weighing_result_address: int | None = Field(R.IR_WEIGHING_RESULT, ge=1)
+    product_settings_address: int | None = Field(R.HR_PRODUCT_BLOCK_START, ge=1)
+    # Weight decimals, needed to decode the weighing result when product settings are not readable.
+    decimals: int | None = Field(None, ge=0, le=6)
+
+    @property
+    def layout(self) -> R.Layout:
+        return R.Layout(self.summary_address, self.weighing_result_address, self.product_settings_address)
+
+    @model_validator(mode="after")
+    def _one_read(self) -> ModbusConfig:
+        if self.layout.ir_span(with_weight=True)[1] > R.MAX_READ:
+            raise ValueError("summary_address and weighing_result_address must lie within one 125-register read")
+        return self
 
 
 class MachineConfig(BaseModel):
@@ -79,6 +98,11 @@ class MachineConfig(BaseModel):
             raise ValueError(f"machine {self.code}: mode {self.mode} requires a serial section")
         if "modbus" in self.mode and self.modbus is None:
             raise ValueError(f"machine {self.code}: mode {self.mode} requires a modbus section")
+        mb = self.modbus
+        if (self.mode == "modbus" and mb is not None and mb.weighing_result_address is not None
+                and mb.product_settings_address is None and mb.decimals is None):
+            raise ValueError(f"machine {self.code}: set modbus.decimals (product settings are not readable, so the "
+                             "weighing result cannot be scaled), or weighing_result_address: null")
         return self
 
     @property

@@ -13,7 +13,9 @@ serial       every line timestamped with text, hex and parse result; Ctrl+C prin
 serial-scan  tries common baud/format combinations, ranked by parsable lines (products must be passing)
 modbus       IR 1-44 (the indicator reports its own IP and RS-232C settings: proves which device answers),
              HR 1-10, HR 619-688, IR 190-283 raw and decoded with every word order x value encoding, range checks
-             against manual Tables 18/19, counter-sum and limit-ordering checks; --watch prints counter deltas
+             against manual Tables 18/19, counter-sum and limit-ordering checks; --watch prints counter deltas.
+             Firmware that shifts the blocks: --summary-address / --weighing-result-address /
+             --product-settings-address (0 = not available) / --decimals, same meaning as in config.yaml
 Against the simulator (cw-sim run): serial socket://127.0.0.1:7001, modbus 127.0.0.1 --port 5020.
 """
 
@@ -325,36 +327,44 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
 Words = dict[tuple[str, int], int | None]
 
-# Manual Table 18: IR 1-12 are the indicator's own IP / subnet / gateway, IR 23-28 its RS-232C settings.
+# Manual Table 18: IR 1-12 are the indicator's own IP / subnet / gateway; port settings follow (firmware-dependent).
 IDENTITY = ("ir", 1, 44, "indicator network + port settings")
-BLOCKS = [
-    ("hr", R.HR_PRODUCT_NO, 10, "product / group number"),
-    ("hr", R.HR_PRODUCT_BLOCK_START, R.HR_PRODUCT_BLOCK_COUNT, "active product settings"),
-    ("ir", R.IR_BLOCK_START, R.IR_BLOCK_COUNT, "all summary + weighing result"),
-]
+# Fields below use the manual's addresses; at() moves them to where --*-address says this firmware keeps the block.
 U16 = [(R.HR_DECIMAL_POINT, "decimal point"), (R.HR_DIVISION, "division"), (R.HR_REJECT_STAGE, "reject stage"),
        (R.HR_OW_EXCEPTION, "OW exception"), (R.HR_PRODUCT_LENGTH, "length"), (R.HR_SPEED, "speed")]
 LIMITS = [(R.HR_TARGET, "target"), (R.HR_HIHI, "HiHi"), (R.HR_HI, "Hi"), (R.HR_LO, "Lo"), (R.HR_LOLO, "LoLo"),
           (R.HR_TARE, "tare")]
-SUMMARY_VALUES = [(R.IR_ALL_TOTAL_WEIGHT, "summary total weight"), (R.IR_ALL_AVERAGE, "summary average"),
-                  (R.IR_ALL_MAX, "summary max"), (R.IR_ALL_MIN, "summary min"),
-                  (R.IR_WEIGHING_RESULT, "last weighing result")]
 COUNTERS = [(R.IR_ALL_TOTAL, "total", "total"), (R.IR_ALL_OK, "OK", "passed"), (R.IR_ALL_HIHI, "HH", "over HiHi"),
             (R.IR_ALL_HI, "HI", "over Hi"), (R.IR_ALL_LO, "LO", "under Lo"), (R.IR_ALL_LOLO, "LL", "under LoLo"),
             (R.IR_ALL_DETECT_TWO, "TD", "detect two"), (R.IR_ALL_UNSPLIT, "US", "unsplit"),
             (R.IR_ALL_FOREIGN, "MD", "foreign / metal")]
 CODECS = {f"{wo}/{enc}": R.Codec(wo, enc) for enc in ("scaled_int", "float32") for wo in ("little", "big")}
 MAX_COUNT = 9_999_999  # Table 18 range of every summary counter
-# (kind, address, name, min, max) from Tables 18 / 19; a real indicator never reports values outside these.
-RANGES = [("hr", R.HR_PRODUCT_NO, "product number", 1, 100), ("hr", R.HR_GROUP_NO, "group number", 1, 10),
-          ("hr", R.HR_DECIMAL_POINT, "decimal point", 0, 4), ("hr", R.HR_DIVISION, "division", 0, 5),
-          ("hr", R.HR_PRODUCT_LENGTH, "product length", 30, 999), ("hr", R.HR_SPEED, "speed", 10, 120),
-          ("ir", 36, "Modbus slave address", 1, 247)]
-# RS-232C setting codes, assuming they follow the order the manual lists the choices in (unverified).
-RS232C = [(23, "port", ["disable", "dump print", "stream", "weighing result", "product change"]),
-          (24, "output mode", ["cyclic print", "A&D format"]),
-          (25, "baud", ["2400", "4800", "9600", "19200", "38400", "57600", "115200"]),
-          (26, "parity", ["none", "even", "odd"]), (27, "data bits", ["7", "8"]), (28, "stop bits", ["1", "2"])]
+# (manual address, name, min, max) from Table 19; a real indicator never reports values outside these.
+ID_RANGES = [(R.HR_PRODUCT_NO, "product number", 1, 100), (R.HR_GROUP_NO, "group number", 1, 10)]
+PRODUCT_RANGES = [(R.HR_DECIMAL_POINT, "decimal point", 0, 4), (R.HR_DIVISION, "division", 0, 5),
+                  (R.HR_PRODUCT_LENGTH, "product length", 30, 999), (R.HR_SPEED, "speed", 10, 120)]
+
+
+def layout_of(args: argparse.Namespace) -> R.Layout:
+    return R.Layout(args.summary_address, args.weighing_result_address or None, args.product_settings_address or None)
+
+
+def at(layout: R.Layout, manual_address: int) -> int:
+    """Where this firmware keeps a field the manual lists at ``manual_address``."""
+    if manual_address >= R.HR_PRODUCT_BLOCK_START and layout.product_settings is not None:
+        return manual_address - R.HR_PRODUCT_BLOCK_START + layout.product_settings
+    return manual_address - R.IR_ALL_TOTAL + layout.summary
+
+
+def blocks_for(layout: R.Layout) -> list[tuple[str, int, int, str]]:
+    blocks = [("hr", R.HR_PRODUCT_NO, 10, "product / group number")]
+    if layout.product_settings is not None:
+        blocks.append(("hr", layout.product_settings, R.HR_PRODUCT_BLOCK_COUNT, "product settings"))
+    start, count = layout.ir_span(with_weight=True)
+    end = min(start + R.MAX_READ, max(start + count, layout.summary + 40))  # statistics follow the counters
+    blocks.append(("ir", start, end - start, "summary counters + weighing result"))
+    return blocks
 
 
 def parse_range(s: str) -> tuple[str, int, int]:
@@ -394,7 +404,7 @@ def read_regs(client: ModbusTcpClient, kind: str, start: int, count: int, device
                  + ("all OK" if not failed else "failed at " + ", ".join(failed)))
 
 
-def read_all(client: ModbusTcpClient, device_id: int, which: list[tuple[str, int, int, str]] = BLOCKS,
+def read_all(client: ModbusTcpClient, device_id: int, which: list[tuple[str, int, int, str]],
              ) -> tuple[Words, list[tuple[str, int, int, str, list[int | None], str]]]:
     words: Words = {}
     blocks = []
@@ -432,9 +442,15 @@ def pair(words: Words, kind: str, addr: int) -> str:
     return "---- ----" if w0 is None or w1 is None else f"{w0:04x} {w1:04x}"
 
 
-def decimal_point(words: Words) -> int:
-    dp = words.get(("hr", R.HR_DECIMAL_POINT))
-    return dp if dp is not None and 0 <= dp <= 6 else 0
+def decimal_point(words: Words, layout: R.Layout, decimals: int | None) -> tuple[int, str]:
+    """(decimals used to scale weights, where they came from)."""
+    if layout.product_settings is None:
+        return decimals or 0, "--decimals" if decimals is not None else "default 0 (pass --decimals)"
+    addr = at(layout, R.HR_DECIMAL_POINT)
+    dp = words.get(("hr", addr))
+    if dp is not None and 0 <= dp <= 6:
+        return dp, f"HR {addr}"
+    return decimals or 0, f"HR {addr} = {dp} is not a digit count; using {decimals or 0}"
 
 
 def limit_shape(t: Decimal | None, hh: Decimal | None, h: Decimal | None, lo: Decimal | None,
@@ -453,7 +469,9 @@ def limit_shape(t: Decimal | None, hh: Decimal | None, h: Decimal | None, lo: De
 
 
 def dump(client: ModbusTcpClient, args: argparse.Namespace) -> None:
-    words, blocks = read_all(client, args.device_id, [IDENTITY, *BLOCKS, *((*r, "extra") for r in args.range)])
+    layout = layout_of(args)
+    which = [IDENTITY, *blocks_for(layout), *((*r, "extra") for r in args.range)]
+    words, blocks = read_all(client, args.device_id, which)
     for kind, start, count, label, regs, note in blocks:
         print(f"\n{kind.upper()} {start}..{start + count - 1} ({label}): {note}")
         for i in range(0, count, 8):
@@ -471,51 +489,59 @@ def dump(client: ModbusTcpClient, args: argparse.Namespace) -> None:
     else:
         print(f"  !! does not match {args.host}: another device (PLC / HMI / router?) is answering, or addresses are"
               " offset. Check the indicator's LAN settings screen before trusting anything below.")
-    rs = []
-    for a, name, choices in RS232C:
-        v = words.get(("ir", a))
-        rs.append(f"{name}={v}" + (f" ({choices[v]})" if v is not None and 0 <= v < len(choices) else ""))
-    print("RS-232C (IR 23-28; code meanings assumed from the manual's list order): " + ", ".join(rs))
-    print(f"Modbus setting (IR 35) = {words.get(('ir', 35))}, slave address (IR 36) = {words.get(('ir', 36))}, "
-          f"unit code (IR 38) = {words.get(('ir', 38))}")
-    bad = [f"{name} ({kind.upper()} {a}) = {v}, manual range {lo}-{hi}" for kind, a, name, lo, hi in RANGES
-           if (v := words.get((kind, a))) is not None and not lo <= v <= hi]
-    if (words.get(("hr", R.HR_CAPACITY)), words.get(("hr", R.HR_CAPACITY + 1))) == (0, 0):
-        bad.append(f"capacity (HR {R.HR_CAPACITY}) = 0")
+    print("port settings (IR 23-44; layout varies by firmware): "
+          + " ".join(str(words.get(("ir", a))) for a in range(23, 45)))
+    print(f"layout: summary at IR {layout.summary}, weighing result at "
+          f"{'-' if layout.weighing_result is None else f'IR {layout.weighing_result}'}, product settings at "
+          f"{'- (not readable)' if layout.product_settings is None else f'HR {layout.product_settings}'}")
+    bad = [f"{name} (HR {a}) = {v}, manual range {lo}-{hi}" for a, name, lo, hi in ID_RANGES
+           if (v := words.get(("hr", a))) is not None and not lo <= v <= hi]
+    if layout.product_settings is not None:
+        bad += [f"{name} (HR {at(layout, a)}) = {v}, manual range {lo}-{hi}" for a, name, lo, hi in PRODUCT_RANGES
+                if (v := words.get(("hr", at(layout, a)))) is not None and not lo <= v <= hi]
+        cap = at(layout, R.HR_CAPACITY)
+        if (words.get(("hr", cap)), words.get(("hr", cap + 1))) == (0, 0):
+            bad.append(f"capacity (HR {cap}) = 0")
     for b in bad:
         print(f"  !! {b}")
     if bad:
-        print("  -> values outside the manual's ranges: these registers are not this indicator's live settings")
+        print("  -> values outside the manual's ranges: the product block is not at this address on this firmware"
+              " (try --product-settings-address, or 0 if it is not readable)")
 
     print("\n==== decoded: compare every value with the indicator display ====")
     print("HR 1..10 as u16: " + " ".join(str(words.get(("hr", a))) for a in range(1, 11)))
     print(f"product no (HR 1) = {words.get(('hr', 1))}, group no (HR 2) = {words.get(('hr', 2))}"
-          "  <- if they show up one register later, the address offset is wrong")
-    print("  ".join(f"{name} (HR {a}) = {words.get(('hr', a))}" for a, name in U16))
+          "  <- the display shows them as No. GG-PPP")
+    if layout.product_settings is not None:
+        print("  ".join(f"{name} (HR {at(layout, a)}) = {words.get(('hr', at(layout, a)))}" for a, name in U16))
 
-    dp, dp_raw = decimal_point(words), words.get(("hr", R.HR_DECIMAL_POINT))
-    print(f"\n32-bit values; scaled_int uses dp={dp} from HR {R.HR_DECIMAL_POINT}"
-          + ("" if dp == dp_raw else f" (raw value {dp_raw} is not a digit count!)"))
+    dp, dp_from = decimal_point(words, layout, args.decimals)
+    print(f"\n32-bit values; scaled_int uses dp={dp} ({dp_from})")
     print(f"  {'':32}{'words':<11}" + "".join(f"{k:>19}" for k in CODECS))
+    rows = [("hr", at(layout, a), n) for a, n in LIMITS] if layout.product_settings is not None else []
+    if layout.weighing_result is not None:
+        rows.append(("ir", layout.weighing_result, "last weighing result"))
     vals: dict[str, dict[str, Decimal | None]] = {}
-    for kind, addr, name in [*(("hr", a, n) for a, n in LIMITS), *(("ir", a, n) for a, n in SUMMARY_VALUES)]:
+    for kind, addr, name in rows:
         vals[name] = {k: decode(c, words, kind, addr, dp) for k, c in CODECS.items()}
         print(f"  {kind.upper()} {addr:<4} {name:<24}{pair(words, kind, addr):<11}"
               + "".join(f"{num(v):>19}" for v in vals[name].values()))
 
-    print("\nlimit check per decoding (the collector assumes absolute weights):")
     plausible: dict[str, str] = {}
-    for k in CODECS:
-        shape = limit_shape(*(vals[n][k] for n in ("target", "HiHi", "Hi", "Lo", "LoLo")))
-        print(f"  {k:<19} {shape}")
-        if shape not in ("unreadable", "implausible"):
-            plausible[k] = shape
+    if layout.product_settings is not None:
+        print("\nlimit check per decoding (the collector assumes absolute weights):")
+        for k in CODECS:
+            shape = limit_shape(*(vals[n][k] for n in ("target", "HiHi", "Hi", "Lo", "LoLo")))
+            print(f"  {k:<19} {shape}")
+            if shape not in ("unreadable", "implausible"):
+                plausible[k] = shape
 
     print("\nsummary counters: compare with the indicator's summary screen")
     orders = {wo: R.Codec(wo) for wo in ("little", "big")}
-    counts = {wo: {code: u32(c, words, addr) for addr, code, _ in COUNTERS} for wo, c in orders.items()}
+    counts = {wo: {code: u32(c, words, at(layout, a)) for a, code, _ in COUNTERS} for wo, c in orders.items()}
     print(f"  {'':32}{'words':<11}" + "".join(f"{'u32 ' + wo:>14}" for wo in orders))
-    for addr, code, label in COUNTERS:
+    for a, code, label in COUNTERS:
+        addr = at(layout, a)
         print(f"  IR {addr:<4} {label:<24}{pair(words, 'ir', addr):<11}"
               + "".join(f"{num(counts[wo][code]):>14}" for wo in orders))
     sums = {wo: None if None in d.values() else sum(v for k, v in d.items() if k != "total" and v is not None)
@@ -539,7 +565,9 @@ def dump(client: ModbusTcpClient, args: argparse.Namespace) -> None:
         print(f"word_order: {likely}  (total reads {total} this way)")
         print("counters: total = OK + HH + HI + LO + LL + TD + US + MD" if total == cats else
               f"counters: total is {total - cats} more than the categories (E1/E2 or other rejects only in total?)")
-    if len(plausible) == 1:
+    if layout.product_settings is None:
+        print("value_encoding: cannot be checked without product settings; compare the last weighing result above")
+    elif len(plausible) == 1:
         k, shape = next(iter(plausible.items()))
         print(f"value_encoding: {k.split('/')[1]}  (as {k}; limits are {shape})")
     elif plausible:
@@ -551,26 +579,31 @@ def dump(client: ModbusTcpClient, args: argparse.Namespace) -> None:
 
 
 def watch(client: ModbusTcpClient, args: argparse.Namespace) -> None:
-    codec = R.Codec(args.word_order, args.value_encoding)
-    print(f"\n# polling every {args.watch:g}s as {args.word_order}/{args.value_encoding} (Ctrl+C to stop)")
+    codec, layout = R.Codec(args.word_order, args.value_encoding), layout_of(args)
+    which = blocks_for(layout)
+    print(f"\n# polling every {args.watch:g}s as {args.word_order}/{args.value_encoding} (Ctrl+C to stop); a weight"
+          " line without a counter change means the register moved with no product judged (live weight?)")
     prev_counts: dict[str, int | None] | None = None
     prev_product: list[int | None] | None = None
+    prev_weight: str | None = None
     while True:
-        words, _ = read_all(client, args.device_id)
+        words, _ = read_all(client, args.device_id, which)
         if None in words.values():
             print(f"{stamp()} read failed; retrying")
             time.sleep(args.watch)
             continue
-        dp = decimal_point(words)
-        product = [words[("hr", a)] for a in (1, 2, *range(R.HR_PRODUCT_BLOCK_START,
-                                                            R.HR_PRODUCT_BLOCK_START + R.HR_PRODUCT_BLOCK_COUNT))]
+        dp, _ = decimal_point(words, layout, args.decimals)
+        product = [v for (kind, _a), v in sorted(words.items()) if kind == "hr"]
         if product != prev_product:
+            limits = ("  ".join(f"{n}={num(decode(codec, words, 'hr', at(layout, a), dp))}" for a, n in LIMITS)
+                      if layout.product_settings is not None else "(product settings not readable)")
             print(f"{stamp()} product G{words[('hr', R.HR_GROUP_NO)]}-P{words[('hr', R.HR_PRODUCT_NO)]} dp={dp}  "
-                  + "  ".join(f"{n}={num(decode(codec, words, 'hr', a, dp))}" for a, n in LIMITS))
+                  + limits)
             prev_product = product
-        counts = {code: u32(codec, words, addr) for addr, code, _ in COUNTERS}
-        weight = (f"last weight [{pair(words, 'ir', R.IR_WEIGHING_RESULT)}] "
-                  f"{num(decode(codec, words, 'ir', R.IR_WEIGHING_RESULT, dp))}")
+        counts = {code: u32(codec, words, at(layout, a)) for a, code, _ in COUNTERS}
+        wr = layout.weighing_result
+        raw_weight = "" if wr is None else pair(words, "ir", wr)
+        weight = "" if wr is None else f"last weight [{raw_weight}] {num(decode(codec, words, 'ir', wr, dp))}"
         if prev_counts is None:
             print(f"{stamp()} counters " + " ".join(f"{k}={v}" for k, v in counts.items()) + f"  {weight}")
         elif counts != prev_counts:
@@ -581,7 +614,9 @@ def watch(client: ModbusTcpClient, args: argparse.Namespace) -> None:
                 deltas = " ".join(f"{k}+{(v or 0) - (prev_counts[k] or 0)}" for k, v in counts.items()
                                   if k != "total" and v != prev_counts[k])
                 print(f"{stamp()} total {total} (+{total - prev_total})  {deltas or '(no category moved)'}  {weight}")
-        prev_counts = counts
+        elif raw_weight != prev_weight:
+            print(f"{stamp()} {weight}  (no counter changed)")
+        prev_counts, prev_weight = counts, raw_weight
         time.sleep(args.watch)
 
 
@@ -637,6 +672,13 @@ def main() -> None:
     m.add_argument("--range", type=parse_range, action="append", default=[], metavar="hr|ir:START:COUNT",
                    help="extra raw dump, 1-based manual addresses (repeatable)")
     m.add_argument("--watch", type=float, metavar="SECONDS", help="after the dump, poll and print counter changes")
+    m.add_argument("--summary-address", type=int, default=R.IR_ALL_TOTAL,
+                   help="IR of 'All summary - Total number' (manual 190; site 1 firmware 216)")
+    m.add_argument("--weighing-result-address", type=int, default=R.IR_WEIGHING_RESULT,
+                   help="IR of the last weighing result, 0 = none (manual 282; site 1 candidate 214)")
+    m.add_argument("--product-settings-address", type=int, default=R.HR_PRODUCT_BLOCK_START,
+                   help="HR of 'Decimal point', 0 = not readable (manual 619)")
+    m.add_argument("--decimals", type=int, help="weight decimals when product settings are not readable")
     m.add_argument("--word-order", choices=["little", "big"], default="little", help="decoding used by --watch")
     m.add_argument("--value-encoding", choices=["scaled_int", "float32"], default="scaled_int",
                    help="decoding used by --watch")

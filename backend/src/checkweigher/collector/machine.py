@@ -59,7 +59,8 @@ class MachineWorker:
         self._serial: SerialLineReader | None = None
         self._bg: set[asyncio.Task] = set()
         self._pending: list[WeighingRecord] = []
-        self._context_deadline = time.monotonic() + CONTEXT_WAIT_S if cfg.uses_modbus else 0.0
+        reads_product = cfg.uses_modbus and cfg.modbus is not None and cfg.modbus.product_settings_address is not None
+        self._context_deadline = time.monotonic() + CONTEXT_WAIT_S if reads_product else 0.0
 
     # ---- helpers ---------------------------------------------------------------------------------
     def _spawn(self, coro) -> None:
@@ -156,8 +157,13 @@ class MachineWorker:
         return R.Block(address, list(rr.registers), codec)
 
     async def _read_context(self, client: AsyncModbusTcpClient) -> None:
+        mb = self.cfg.modbus
+        assert mb is not None
+        if mb.product_settings_address is None:
+            self.decimal_point = mb.decimals
+            return
         ids = await self._read(client, "hr", R.HR_PRODUCT_NO, 2)
-        prod = await self._read(client, "hr", R.HR_PRODUCT_BLOCK_START, R.HR_PRODUCT_BLOCK_COUNT)
+        prod = await self._read(client, "hr", mb.product_settings_address, R.HR_PRODUCT_BLOCK_COUNT)
         settings = R.ProductSettings.from_blocks(ids, prod)
         self.decimal_point = settings.decimal_point
         ctx = ProductContext.from_settings(settings, self.cfg.unit)
@@ -175,11 +181,18 @@ class MachineWorker:
                         {"group_no": ctx.group_no, "product_no": ctx.product_no, "target_g": str(ctx.target_g),
                          "hi_g": str(ctx.hi_g), "lo_g": str(ctx.lo_g)})
 
-    async def _read_counters(self, client: AsyncModbusTcpClient) -> tuple[R.Counters, R.Block]:
-        block = await self._read(client, "ir", R.IR_BLOCK_START, R.IR_BLOCK_COUNT)
-        counters = R.Counters.from_block(block)
+    async def _read_counters(self, client: AsyncModbusTcpClient, with_weight: bool = False,
+                             ) -> tuple[R.Counters, Decimal | None]:
+        """Counters and (optionally) the last weighing result in grams, from one read."""
+        assert self.cfg.modbus is not None
+        layout = self.cfg.modbus.layout
+        block = await self._read(client, "ir", *layout.ir_span(with_weight))
+        counters = R.Counters.from_block(block, layout.summary)
         self.device_counters = asdict(counters)
-        return counters, block
+        weight_g = None
+        if with_weight and layout.weighing_result is not None and self.decimal_point is not None:
+            weight_g = block.value(layout.weighing_result, self.decimal_point) * UNIT_TO_GRAMS[self.cfg.unit]
+        return counters, weight_g
 
     async def _reconcile(self, client: AsyncModbusTcpClient) -> None:
         counters, _ = await self._read_counters(client)
@@ -199,10 +212,7 @@ class MachineWorker:
                          window.received, window.expected)
 
     async def _poll_modbus_only(self, client: AsyncModbusTcpClient) -> None:
-        counters, block = await self._read_counters(client)
-        weight_g = None
-        if self.decimal_point is not None:
-            weight_g = block.value(R.IR_WEIGHING_RESULT, self.decimal_point) * UNIT_TO_GRAMS[self.cfg.unit]
+        counters, weight_g = await self._read_counters(client, with_weight=True)
         result = self.deltas.update(counters, weight_g, self.ctx)
         if result.reset:
             self._event("summary_cleared", "indicator summary counters were reset")

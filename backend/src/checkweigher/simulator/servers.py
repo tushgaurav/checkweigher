@@ -55,8 +55,9 @@ class SerialBroadcastServer:
 
 
 class ModbusEndpoint:
-    def __init__(self, sim: SimIndicator, codec: R.Codec, host: str, port: int, device_id: int):
-        self.sim, self.codec, self.device_id = sim, codec, device_id
+    def __init__(self, sim: SimIndicator, codec: R.Codec, host: str, port: int, device_id: int,
+                 layout: R.Layout = R.MANUAL):
+        self.sim, self.codec, self.device_id, self.layout = sim, codec, device_id, layout
 
         def regs(n: int) -> list[SimData]:
             return [SimData(0, count=n, values=0, datatype=DataType.REGISTERS)]
@@ -65,7 +66,7 @@ class ModbusEndpoint:
             return [SimData(0, count=16, values=False, datatype=DataType.BITS)]
 
         # Distinct blocks (co, di, hr, ir): holding and input registers overlap in address space.
-        device = SimDevice(device_id, simdata=(bits(), bits(), regs(720), regs(300)))
+        device = SimDevice(device_id, simdata=(bits(), bits(), regs(1000), regs(1000)))
         self.server = ModbusTcpServer(device, address=(host, port))
         self.host, self.port = host, port
 
@@ -91,12 +92,22 @@ class ModbusEndpoint:
     async def publish_product(self) -> None:
         await self.server.async_setValues(self.device_id, FC_HOLDING, R.offset(R.HR_PRODUCT_NO),
                                           self.sim.holding_ids())
-        await self.server.async_setValues(self.device_id, FC_HOLDING, R.offset(R.HR_PRODUCT_BLOCK_START),
-                                          self.sim.holding_product_block(self.codec))
+        if self.layout.product_settings is not None:
+            await self.server.async_setValues(self.device_id, FC_HOLDING, R.offset(self.layout.product_settings),
+                                              self.sim.holding_product_block(self.codec))
 
     async def publish_counters(self) -> None:
-        await self.server.async_setValues(self.device_id, FC_INPUT, R.offset(R.IR_BLOCK_START),
-                                          self.sim.input_block(self.codec))
+        regs = self.sim.input_block(self.codec)
+        if self.layout == R.MANUAL:
+            await self.server.async_setValues(self.device_id, FC_INPUT, R.offset(R.IR_BLOCK_START), regs)
+            return
+        # Shifted firmware: only the blocks the collector reads, at their configured addresses.
+        await self.server.async_setValues(self.device_id, FC_INPUT, R.offset(self.layout.summary),
+                                          regs[: R.COUNTERS_COUNT])
+        if self.layout.weighing_result is not None:
+            i = R.IR_WEIGHING_RESULT - R.IR_BLOCK_START
+            await self.server.async_setValues(self.device_id, FC_INPUT, R.offset(self.layout.weighing_result),
+                                              regs[i : i + 2])
 
     async def stop(self) -> None:
         await self.server.shutdown()

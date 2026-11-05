@@ -12,7 +12,7 @@ import sys
 import time
 
 from checkweigher.config import load_config
-from checkweigher.device.registers import Codec
+from checkweigher.device.registers import Codec, Layout
 from checkweigher.simulator.device import DEFAULT_PRODUCTS, SimIndicator, SimProduct
 from checkweigher.simulator.servers import ModbusEndpoint, SerialBroadcastServer
 
@@ -24,8 +24,9 @@ async def run(args: argparse.Namespace) -> None:
     sim = SimIndicator(product, sd=args.sd, bias=args.bias, td_rate=args.td_rate, us_rate=args.us_rate,
                        md_rate=args.md_rate, seed=args.seed)
     codec = Codec(args.word_order, args.value_encoding)
+    layout = Layout(args.summary_address, args.weighing_result_address or None, args.product_settings_address or None)
     serial_out = SerialBroadcastServer(args.host, args.serial_port)
-    modbus = ModbusEndpoint(sim, codec, args.host, args.modbus_port, args.device_id)
+    modbus = ModbusEndpoint(sim, codec, args.host, args.modbus_port, args.device_id, layout)
     await serial_out.start()
     await modbus.start()
     rng = random.Random(args.seed)
@@ -75,6 +76,10 @@ def main() -> None:
     r.add_argument("--clear-every-min", type=float, default=0)
     r.add_argument("--word-order", choices=["little", "big"], default="little")
     r.add_argument("--value-encoding", choices=["scaled_int", "float32"], default="scaled_int")
+    # Emulate firmware that shifts the register blocks (0 = block not available).
+    r.add_argument("--summary-address", type=int, default=Layout.summary)
+    r.add_argument("--weighing-result-address", type=int, default=Layout.weighing_result)
+    r.add_argument("--product-settings-address", type=int, default=Layout.product_settings)
     r.add_argument("--seed", type=int)
 
     s = sub.add_parser("seed", help="write synthetic history to the database")

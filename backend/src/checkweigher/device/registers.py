@@ -7,6 +7,9 @@ the wire is ``address - 1`` (manual §10, caution 5).
 ``[0x03E8, 0x0000]``, i.e. low word first. How decimal values (weights) are
 encoded is not stated in the manual; ``scaled_int`` assumes a signed 32-bit
 integer scaled by the product decimal point (holding register 619).
+
+Some firmware inserts registers the manual does not list, which shifts whole
+blocks (see :class:`Layout`). Field order inside a block stays the manual's.
 """
 
 from __future__ import annotations
@@ -37,6 +40,8 @@ IR_ALL_AVERAGE = 210
 IR_ALL_MAX = 212
 IR_ALL_MIN = 214
 IR_WEIGHING_RESULT = 282
+COUNTERS_COUNT = IR_ALL_FOREIGN + 2 - IR_ALL_TOTAL  # total .. foreign matter: 9 x 4 bytes
+MAX_READ = 125  # Modbus limit for one register read
 
 # ---- Holding registers (function 03) ------------------------------------------------------------
 HR_PRODUCT_NO = 1
@@ -73,6 +78,29 @@ COUNTER_JUDGEMENTS: dict[str, str] = {
 
 def offset(address: int) -> int:
     return address - 1
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Where a firmware keeps the blocks the collector reads (1-based addresses).
+
+    Defaults are the manual's. ``None`` means the block is not available on that firmware.
+    """
+
+    summary: int = IR_ALL_TOTAL  # IR "All summary - Total number"; the 8 category counters follow
+    weighing_result: int | None = IR_WEIGHING_RESULT  # IR last weighing result (4 bytes)
+    product_settings: int | None = HR_PRODUCT_BLOCK_START  # HR "Decimal point", first of the product block
+
+    def ir_span(self, with_weight: bool) -> tuple[int, int]:
+        """(start, count) of one input-register read covering the counters and, optionally, the weight."""
+        parts = [(self.summary, COUNTERS_COUNT)]
+        if with_weight and self.weighing_result is not None:
+            parts.append((self.weighing_result, 2))
+        start = min(a for a, _ in parts)
+        return start, max(a + n for a, n in parts) - start
+
+
+MANUAL = Layout()
 
 
 class Codec:
@@ -152,17 +180,19 @@ class Counters:
     foreign: int
 
     @classmethod
-    def from_block(cls, b: Block) -> Counters:
+    def from_block(cls, b: Block, summary: int = IR_ALL_TOTAL) -> Counters:
+        """``summary``: address of the total counter on this firmware (see :class:`Layout`)."""
+        at = summary - IR_ALL_TOTAL
         return cls(
-            total=b.u32(IR_ALL_TOTAL),
-            ok=b.u32(IR_ALL_OK),
-            hihi=b.u32(IR_ALL_HIHI),
-            hi=b.u32(IR_ALL_HI),
-            lo=b.u32(IR_ALL_LO),
-            lolo=b.u32(IR_ALL_LOLO),
-            detect_two=b.u32(IR_ALL_DETECT_TWO),
-            unsplit=b.u32(IR_ALL_UNSPLIT),
-            foreign=b.u32(IR_ALL_FOREIGN),
+            total=b.u32(IR_ALL_TOTAL + at),
+            ok=b.u32(IR_ALL_OK + at),
+            hihi=b.u32(IR_ALL_HIHI + at),
+            hi=b.u32(IR_ALL_HI + at),
+            lo=b.u32(IR_ALL_LO + at),
+            lolo=b.u32(IR_ALL_LOLO + at),
+            detect_two=b.u32(IR_ALL_DETECT_TWO + at),
+            unsplit=b.u32(IR_ALL_UNSPLIT + at),
+            foreign=b.u32(IR_ALL_FOREIGN + at),
         )
 
     def by_judgement(self) -> dict[str, int]:
@@ -187,17 +217,19 @@ class ProductSettings:
 
     @classmethod
     def from_blocks(cls, ids: Block, product: Block) -> ProductSettings:
-        dp = product.u16(HR_DECIMAL_POINT)
+        """``product`` must start at the product block's first register, wherever the firmware keeps it."""
+        at = product.start - HR_PRODUCT_BLOCK_START
+        dp = product.u16(HR_DECIMAL_POINT + at)
         return cls(
             group_no=ids.u16(HR_GROUP_NO),
             product_no=ids.u16(HR_PRODUCT_NO),
             decimal_point=dp,
-            target=product.value(HR_TARGET, dp),
-            hihi=product.value(HR_HIHI, dp),
-            hi=product.value(HR_HI, dp),
-            lo=product.value(HR_LO, dp),
-            lolo=product.value(HR_LOLO, dp),
-            tare=product.value(HR_TARE, dp),
-            ow_exception=bool(product.u16(HR_OW_EXCEPTION)),
-            reject_stage=product.u16(HR_REJECT_STAGE),
+            target=product.value(HR_TARGET + at, dp),
+            hihi=product.value(HR_HIHI + at, dp),
+            hi=product.value(HR_HI + at, dp),
+            lo=product.value(HR_LO + at, dp),
+            lolo=product.value(HR_LOLO + at, dp),
+            tare=product.value(HR_TARE + at, dp),
+            ow_exception=bool(product.u16(HR_OW_EXCEPTION + at)),
+            reject_stage=product.u16(HR_REJECT_STAGE + at),
         )

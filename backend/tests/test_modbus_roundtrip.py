@@ -54,3 +54,29 @@ async def test_counters_and_product_roundtrip(word_order, encoding):
     finally:
         client.close()
         await ep.stop()
+
+
+async def test_shifted_firmware_layout_roundtrip():
+    """Firmware that inserts registers ahead of the summary and has no readable product block (site 1)."""
+    codec, layout = R.Codec(), R.Layout(summary=216, weighing_result=214, product_settings=None)
+    sim = SimIndicator(SimProduct.around(500), seed=2)
+    for i in range(40):
+        sim.next_piece(float(i))
+    port = free_port()
+    ep = ModbusEndpoint(sim, codec, "127.0.0.1", port, device_id=1, layout=layout)
+    await ep.start()
+    client = AsyncModbusTcpClient("127.0.0.1", port=port, timeout=2, reconnect_delay=0)
+    try:
+        assert await client.connect()
+        start, count = layout.ir_span(with_weight=True)
+        ir = await client.read_input_registers(R.offset(start), count=count, device_id=1)
+        hr = await client.read_holding_registers(R.offset(R.HR_PRODUCT_BLOCK_START),
+                                                 count=R.HR_PRODUCT_BLOCK_COUNT, device_id=1)
+        block = R.Block(start, ir.registers, codec)
+        counters = R.Counters.from_block(block, layout.summary)
+        assert counters.total == 40 and counters.ok == sim.counters["ok"]
+        assert block.value(layout.weighing_result, 1) == sim.last_weight
+        assert not any(hr.registers)  # nothing at the manual's product block
+    finally:
+        client.close()
+        await ep.stop()

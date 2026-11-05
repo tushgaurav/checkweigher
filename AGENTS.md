@@ -28,9 +28,22 @@ indicator ──RS-232C "Weighing Result / Cyclic Print"──> collector ──
   encoding of decimal registers is NOT stated: `value_encoding` (scaled_int | float32) and `word_order` are
   per-machine config - verify on site. IR 1-4 hold the indicator's own IP (identity check), IR 23-28 its RS-232C
   settings. RS-232C factory default is 2400 baud 7N1 (manual §9 defaults table); the collector default is 9600 8N1.
-- Site 1 (2026-11-05): the Modbus device at 192.168.0.1 returned values outside the manual's ranges (capacity 0,
-  speed 0, product length 0, invalid counter pairs) - not yet proven to be the indicator. Do not run Modbus modes there
-  until the probe's identity check passes.
+- Site 1 (2026-11-05, AD-4412-CW at 192.168.0.1, Modbus TCP slave 1): firmware differs from the manual. Its RS-232C
+  menu is Serial Mode / Output Format ("Weight Data Only") / Output Preset Tare / Output 2nd header + baud/parity/
+  data/stop (screen: Disable, 115200 8N1). Modbus confirms: IR 23-30 and IR 31-38 are 8-field RS-232C / RS-485 blocks
+  (manual: 6 fields), so later addresses shift (IR 39 = 2 Modbus TCP, IR 40 = 1 slave address). Decoded from the dump,
+  low word first, scaled integers: All summary starts at IR 216 (total, OK, HiHi, Hi, Lo, LoLo, TD, US, foreign, then
+  4 counters not in the manual at 234-240), total weight 242, average 244, max 246, min 248, range 250, SD 252
+  (2 decimals), CV 254 (16-bit, 2 decimals); OK summary 255-269 (count, total weight, avg, max, min, range, SD, CV);
+  sample summary from 270, OK sample summary from 309. Cross-checks hold (total = sum, range = max - min,
+  CV = SD / mean). A before/after dump around 10 Hi products confirmed the counters (total +10, Hi +10). IR 214 went
+  0 -> 222.6 g (the last product): last weighing result OR live weight - unverified. HR 1-1000 holds no product
+  settings (non-zero values match DI settings in Table 19), so target/limits are not readable over Modbus there.
+  Serial: Output Format offers Cyclic Print; Serial Mode lists Disable / Summary / Stream / Weighing Result & Summary.
+- Block addresses are per-machine config (`modbus.summary_address`, `weighing_result_address`,
+  `product_settings_address`, null = not available, plus `decimals` when product settings are unreadable) ->
+  `registers.Layout`. Decoding always uses the manual's field order inside a block. The simulator (`--summary-address`
+  etc.) and `probe.py modbus` take the same options.
 - Rows are filtered by stored production date + shift (`shift_date`, `shift_code`); a night shift crossing midnight
   belongs to the date it started. 15-minute aggregate buckets keep IST (UTC+5:30) hours aligned.
 - `web/` - React 19 + Vite 8 + Tailwind 4 + shadcn (radix, "lyra" style) + TanStack Query + Recharts. Filters live

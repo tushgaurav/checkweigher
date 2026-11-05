@@ -50,3 +50,20 @@ machines:
       poll_interval_s: 0.2      # modbus-only mode
       word_order: "little"      # manual §10.3.1 example: low word first
       value_encoding: "scaled_int"   # verify on site: scaled_int | float32
+      # Block addresses - manual Tables 18/19 by default. Some firmware inserts registers and shifts them;
+      # find them with scripts/probe.py. null = not available on that firmware.
+      summary_address: 190            # IR "All summary - Total number" (the 8 category counters follow)
+      weighing_result_address: 282    # IR last weighing result
+      product_settings_address: 619   # HR "Decimal point", first register of the product block
+      # decimals: 1                   # weight decimals; required when product settings are not readable
+
+  # Example: AD-4412-CW at site 1 (firmware with shifted blocks, product settings not readable over Modbus)
+  # - id: 2
+  #   code: "CW-02"
+  #   name: "Checkweigher 2"
+  #   mode: "modbus"
+  #   modbus:
+  #     host: "192.168.0.1"
+  #     summary_address: 216
+  #     weighing_result_address: null   # IR 214 is the candidate - verify with probe.py --watch first
+  #     product_settings_address: null
