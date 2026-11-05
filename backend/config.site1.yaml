@@ -1,0 +1,53 @@
+# Site 1: AD-4412-CW at 192.168.0.1 (Modbus TCP, slave 1), collector on the site Windows PC.
+# Run every entry point with --config config.site1.yaml (or copy this file over config.yaml on the site PC).
+# Findings behind these settings: AGENTS.md, "Site 1".
+
+plant:
+  name: "Site 1"
+  timezone: "Asia/Kolkata"
+
+database:
+  url: "postgresql://cw:cw@localhost:5433/checkweigher"   # portable PostgreSQL from scripts/dev-db.ps1
+
+collector:
+  spool_dir: "var/spool"
+
+api:
+  host: "127.0.0.1"   # 0.0.0.0 lets other PCs on the network open the dashboard
+  port: 8000
+
+# Replaces the shift table on collector start - adjust to the plant's real shift times.
+shifts:
+  - { code: "A", name: "Shift A", start: "06:00", end: "14:00" }
+  - { code: "B", name: "Shift B", start: "14:00", end: "22:00" }
+  - { code: "C", name: "Shift C", start: "22:00", end: "06:00" }
+
+machines:
+  - id: 1
+    code: "CW-01"
+    name: "Checkweigher 1"
+    # Modbus only for now: exact counts per judgement, no target (not readable on this firmware).
+    # When the RS-232 link is in place switch to "serial+modbus" and uncomment the serial section:
+    # every pack's weight from serial, counter cross-check from Modbus.
+    mode: "modbus"
+    unit: "g"
+    modbus:
+      host: "192.168.0.1"
+      port: 502
+      device_id: 1
+      word_order: "little"
+      value_encoding: "scaled_int"
+      # This firmware shifts the register blocks (manual: 190 / 282 / 619).
+      summary_address: 216
+      # IR 214 is the candidate last weighing result. Verify first with:
+      #   probe.py modbus 192.168.0.1 --summary-address 216 --weighing-result-address 214 --product-settings-address 0 --decimals 1 --watch 0.5
+      # If it holds each product's weight until the next product, set 214 and uncomment decimals.
+      weighing_result_address: null
+      # decimals: 1
+      product_settings_address: null   # target / limits are not readable over Modbus on this firmware
+    # serial:
+    #   url: "COM3"   # the port probe.py ports shows; socket://<ip>:<port> for a serial-to-Ethernet converter
+    #   baudrate: 115200   # indicator: Serial Mode = Weighing Result, Output Format = Cyclic Print, 115200 8N1
+    #   bytesize: 8
+    #   parity: "N"
+    #   stopbits: 1
