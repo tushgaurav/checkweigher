@@ -151,6 +151,7 @@ class SimIndicator:
             regs[i : i + len(words)] = words
 
         put(R.HR_DECIMAL_POINT, [p.decimal_point])
+        put(R.HR_CAPACITY, codec.encode_value(Decimal(6000), p.decimal_point))
         put(R.HR_REJECT_STAGE, [p.reject_stage])
         for addr, v in ((R.HR_TARGET, p.target), (R.HR_HIHI, p.hihi), (R.HR_HI, p.hi), (R.HR_LO, p.lo),
                         (R.HR_LOLO, p.lolo), (R.HR_TARE, p.tare)):

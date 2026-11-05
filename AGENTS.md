@@ -22,8 +22,15 @@ indicator ──RS-232C "Weighing Result / Cyclic Print"──> collector ──
     lists identical.
   - `cw-sim` - simulated indicator (`run`: serial-over-TCP on :7001 + Modbus TCP on :5020; `seed`: synthetic history).
 - Device knowledge: `device/protocol.py` (serial line format), `device/registers.py` (Modbus map, 1-based manual
-  addresses, wire offset = address - 1, low word first per manual §10.3.1). Value encoding of decimal registers is
-  NOT stated in the manual: `value_encoding` (scaled_int | float32) and `word_order` are per-machine config - verify on site.
+  addresses, wire offset = address - 1). Addresses match manual Tables 18/19 (PDF:
+  https://aandd.jp/products/manual/indicators/1WMPD4003953A_AD4412_4413-CW.pdf). "Low word first" comes only from the
+  §10.3.1 example, which itself uses an older map (total at address 45, not 190), so word order is unproven. Value
+  encoding of decimal registers is NOT stated: `value_encoding` (scaled_int | float32) and `word_order` are
+  per-machine config - verify on site. IR 1-4 hold the indicator's own IP (identity check), IR 23-28 its RS-232C
+  settings. RS-232C factory default is 2400 baud 7N1 (manual §9 defaults table); the collector default is 9600 8N1.
+- Site 1 (2026-11-05): the Modbus device at 192.168.0.1 returned values outside the manual's ranges (capacity 0,
+  speed 0, product length 0, invalid counter pairs) - not yet proven to be the indicator. Do not run Modbus modes there
+  until the probe's identity check passes.
 - Rows are filtered by stored production date + shift (`shift_date`, `shift_code`); a night shift crossing midnight
   belongs to the date it started. 15-minute aggregate buckets keep IST (UTC+5:30) hours aligned.
 - `web/` - React 19 + Vite 8 + Tailwind 4 + shadcn (radix, "lyra" style) + TanStack Query + Recharts. Filters live

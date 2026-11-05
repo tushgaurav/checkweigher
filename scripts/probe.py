@@ -3,7 +3,7 @@
 Run from backend/ so the checkweigher package (parser, register map, codec) is importable:
 
   uv run --no-sync python ../scripts/probe.py ports
-  uv run --no-sync python ../scripts/probe.py serial COM3 --baud 9600 --format 8N1 --out serial.log
+  uv run --no-sync python ../scripts/probe.py serial COM3 --baud 2400 --format 7N1 --out serial.log
   uv run --no-sync python ../scripts/probe.py serial-scan COM3 --seconds 10
   uv run --no-sync python ../scripts/probe.py modbus 192.168.1.50 --device-id 1 --watch 1 --out modbus.log
 
@@ -11,8 +11,9 @@ ports        serial ports with USB VID:PID (identifies the adapter chipset)
 serial       every line timestamped with text, hex and parse result; Ctrl+C prints a summary
              (terminators, judgements, running-number gaps, whether TD/US lines consume numbers)
 serial-scan  tries common baud/format combinations, ranked by parsable lines (products must be passing)
-modbus       HR 1-10, HR 619-688, IR 190-283 raw and decoded with every word order x value encoding,
-             counter-sum and limit-ordering checks; --watch then prints counter deltas per poll
+modbus       IR 1-44 (the indicator reports its own IP and RS-232C settings: proves which device answers),
+             HR 1-10, HR 619-688, IR 190-283 raw and decoded with every word order x value encoding, range checks
+             against manual Tables 18/19, counter-sum and limit-ordering checks; --watch prints counter deltas
 Against the simulator (cw-sim run): serial socket://127.0.0.1:7001, modbus 127.0.0.1 --port 5020.
 """
 
@@ -324,6 +325,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
 Words = dict[tuple[str, int], int | None]
 
+# Manual Table 18: IR 1-12 are the indicator's own IP / subnet / gateway, IR 23-28 its RS-232C settings.
+IDENTITY = ("ir", 1, 44, "indicator network + port settings")
 BLOCKS = [
     ("hr", R.HR_PRODUCT_NO, 10, "product / group number"),
     ("hr", R.HR_PRODUCT_BLOCK_START, R.HR_PRODUCT_BLOCK_COUNT, "active product settings"),
@@ -341,6 +344,17 @@ COUNTERS = [(R.IR_ALL_TOTAL, "total", "total"), (R.IR_ALL_OK, "OK", "passed"), (
             (R.IR_ALL_DETECT_TWO, "TD", "detect two"), (R.IR_ALL_UNSPLIT, "US", "unsplit"),
             (R.IR_ALL_FOREIGN, "MD", "foreign / metal")]
 CODECS = {f"{wo}/{enc}": R.Codec(wo, enc) for enc in ("scaled_int", "float32") for wo in ("little", "big")}
+MAX_COUNT = 9_999_999  # Table 18 range of every summary counter
+# (kind, address, name, min, max) from Tables 18 / 19; a real indicator never reports values outside these.
+RANGES = [("hr", R.HR_PRODUCT_NO, "product number", 1, 100), ("hr", R.HR_GROUP_NO, "group number", 1, 10),
+          ("hr", R.HR_DECIMAL_POINT, "decimal point", 0, 4), ("hr", R.HR_DIVISION, "division", 0, 5),
+          ("hr", R.HR_PRODUCT_LENGTH, "product length", 30, 999), ("hr", R.HR_SPEED, "speed", 10, 120),
+          ("ir", 36, "Modbus slave address", 1, 247)]
+# RS-232C setting codes, assuming they follow the order the manual lists the choices in (unverified).
+RS232C = [(23, "port", ["disable", "dump print", "stream", "weighing result", "product change"]),
+          (24, "output mode", ["cyclic print", "A&D format"]),
+          (25, "baud", ["2400", "4800", "9600", "19200", "38400", "57600", "115200"]),
+          (26, "parity", ["none", "even", "odd"]), (27, "data bits", ["7", "8"]), (28, "stop bits", ["1", "2"])]
 
 
 def parse_range(s: str) -> tuple[str, int, int]:
@@ -380,11 +394,11 @@ def read_regs(client: ModbusTcpClient, kind: str, start: int, count: int, device
                  + ("all OK" if not failed else "failed at " + ", ".join(failed)))
 
 
-def read_all(client: ModbusTcpClient, device_id: int, extra: list[tuple[str, int, int, str]] | None = None,
+def read_all(client: ModbusTcpClient, device_id: int, which: list[tuple[str, int, int, str]] = BLOCKS,
              ) -> tuple[Words, list[tuple[str, int, int, str, list[int | None], str]]]:
     words: Words = {}
     blocks = []
-    for kind, start, count, label in [*BLOCKS, *(extra or [])]:
+    for kind, start, count, label in which:
         regs, note = read_regs(client, kind, start, count, device_id)
         words.update({(kind, start + i): v for i, v in enumerate(regs)})
         blocks.append((kind, start, count, label, regs, note))
@@ -439,12 +453,39 @@ def limit_shape(t: Decimal | None, hh: Decimal | None, h: Decimal | None, lo: De
 
 
 def dump(client: ModbusTcpClient, args: argparse.Namespace) -> None:
-    words, blocks = read_all(client, args.device_id, [(*r, "extra") for r in args.range])
+    words, blocks = read_all(client, args.device_id, [IDENTITY, *BLOCKS, *((*r, "extra") for r in args.range)])
     for kind, start, count, label, regs, note in blocks:
         print(f"\n{kind.upper()} {start}..{start + count - 1} ({label}): {note}")
         for i in range(0, count, 8):
             cells = " ".join("----" if v is None else f"{v:04x}" for v in regs[i : i + 8])
             print(f"  {kind.upper()} {start + i:>4}  {cells}")
+
+    print("\n==== identity: is this the AD-4412/4413-CW? ====")
+
+    def dotted(start: int) -> str:
+        return ".".join(str(words.get(("ir", a))) for a in range(start, start + 4))
+
+    print(f"wired LAN IP (IR 1-4) = {dotted(1)}   subnet (IR 5-8) = {dotted(5)}   gateway (IR 9-12) = {dotted(9)}")
+    if dotted(1) == args.host:
+        print(f"  matches {args.host}: this is the indicator and the address offset is right")
+    else:
+        print(f"  !! does not match {args.host}: another device (PLC / HMI / router?) is answering, or addresses are"
+              " offset. Check the indicator's LAN settings screen before trusting anything below.")
+    rs = []
+    for a, name, choices in RS232C:
+        v = words.get(("ir", a))
+        rs.append(f"{name}={v}" + (f" ({choices[v]})" if v is not None and 0 <= v < len(choices) else ""))
+    print("RS-232C (IR 23-28; code meanings assumed from the manual's list order): " + ", ".join(rs))
+    print(f"Modbus setting (IR 35) = {words.get(('ir', 35))}, slave address (IR 36) = {words.get(('ir', 36))}, "
+          f"unit code (IR 38) = {words.get(('ir', 38))}")
+    bad = [f"{name} ({kind.upper()} {a}) = {v}, manual range {lo}-{hi}" for kind, a, name, lo, hi in RANGES
+           if (v := words.get((kind, a))) is not None and not lo <= v <= hi]
+    if (words.get(("hr", R.HR_CAPACITY)), words.get(("hr", R.HR_CAPACITY + 1))) == (0, 0):
+        bad.append(f"capacity (HR {R.HR_CAPACITY}) = 0")
+    for b in bad:
+        print(f"  !! {b}")
+    if bad:
+        print("  -> values outside the manual's ranges: these registers are not this indicator's live settings")
 
     print("\n==== decoded: compare every value with the indicator display ====")
     print("HR 1..10 as u16: " + " ".join(str(words.get(("hr", a))) for a in range(1, 11)))
@@ -483,19 +524,21 @@ def dump(client: ModbusTcpClient, args: argparse.Namespace) -> None:
 
     print("\n==== suggestions (confirm against the display before putting them in config.yaml) ====")
     tl, tb = counts["little"]["total"], counts["big"]["total"]
+    valid = {wo: t for wo in orders
+             if (t := counts[wo]["total"]) is not None and (s := sums[wo]) is not None and s <= t <= MAX_COUNT}
     if tl is None or tb is None:
         print("word_order: counters unreadable")
+    elif not valid:
+        print(f"word_order: unknown - in neither order do the counters fit the manual (total <= {MAX_COUNT:,}, "
+              "categories <= total); these registers do not hold this device's summary")
     elif tl == tb:
         print("word_order: cannot tell while the counters are zero; pass a few products and re-run")
     else:
-        likely = "little" if tl < tb else "big"
-        total, cats = counts[likely]["total"], sums[likely]
+        likely = min(valid, key=lambda wo: valid[wo])
+        total, cats = valid[likely], sums[likely] or 0
         print(f"word_order: {likely}  (total reads {total} this way)")
-        if total is not None and cats is not None:
-            diff = total - cats
-            print("counters: total = OK + HH + HI + LO + LL + TD + US + MD" if diff == 0 else
-                  f"counters: total is {diff} more than the categories (E1/E2 or other rejects only in total?)"
-                  if diff > 0 else f"counters: categories add up to {-diff} more than total (double counting?)")
+        print("counters: total = OK + HH + HI + LO + LL + TD + US + MD" if total == cats else
+              f"counters: total is {total - cats} more than the categories (E1/E2 or other rejects only in total?)")
     if len(plausible) == 1:
         k, shape = next(iter(plausible.items()))
         print(f"value_encoding: {k.split('/')[1]}  (as {k}; limits are {shape})")
@@ -571,17 +614,19 @@ def main() -> None:
 
     s = sub.add_parser("serial", parents=[common], help="capture result lines")
     s.add_argument("url", help="COM3, /dev/ttyUSB0 or socket://host:port")
-    s.add_argument("--baud", type=int, default=9600)
-    s.add_argument("--format", type=serial_format, default="8N1", help="data bits, parity, stop bits (8N1, 7E1, ...)")
+    s.add_argument("--baud", type=int, default=2400, help="default: indicator factory setting")
+    s.add_argument("--format", type=serial_format, default="7N1",
+                   help="data bits, parity, stop bits (8N1, 7E1, ...); default: indicator factory setting")
     s.add_argument("--seconds", type=float, help="stop after this long (default: until Ctrl+C)")
     s.set_defaults(func=cmd_serial)
 
     sc = sub.add_parser("serial-scan", parents=[common], help="find baud rate / format")
     sc.add_argument("url")
     sc.add_argument("--seconds", type=float, default=8, help="listening time per combination")
-    sc.add_argument("--bauds", type=lambda v: [int(x) for x in v.split(",")], default=[2400, 4800, 9600, 19200, 38400])
+    sc.add_argument("--bauds", type=lambda v: [int(x) for x in v.split(",")],
+                    default=[2400, 4800, 9600, 19200, 38400, 57600, 115200])
     sc.add_argument("--formats", type=lambda v: [serial_format(x) for x in v.split(",")],
-                    default=[serial_format(f) for f in ("8N1", "7E1", "7O1", "8E1", "8O1")])
+                    default=[serial_format(f) for f in ("7N1", "8N1", "7E1", "7O1", "8E1", "8O1")])
     sc.set_defaults(func=cmd_scan)
 
     m = sub.add_parser("modbus", parents=[common], help="dump and decode registers")

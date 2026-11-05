@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 
 from pymodbus.server import ModbusTcpServer
@@ -70,9 +71,22 @@ class ModbusEndpoint:
 
     async def start(self) -> None:
         await self.server.serve_forever(background=True)
+        await self.publish_identity()
         await self.publish_product()
         await self.publish_counters()
         log.info("modbus tcp on %s:%d (device id %d)", self.host, self.port, self.device_id)
+
+    async def publish_identity(self) -> None:
+        """IR 1-44 (manual Table 18): own IP / subnet / gateway, RS-232C settings, Modbus slave address."""
+        try:
+            ip = list(ipaddress.IPv4Address(self.host).packed)
+        except ValueError:
+            ip = [0, 0, 0, 0]
+        regs = [0] * 44
+        regs[0:12] = [*ip, 255, 255, 255, 0, *ip[:3], 1]
+        regs[22:28] = [3, 0, 2, 0, 1, 0]  # weighing result, cyclic print, 9600, no parity, 8 bit, 1 stop bit
+        regs[34:36] = [1, self.device_id]
+        await self.server.async_setValues(self.device_id, FC_INPUT, R.offset(1), regs)
 
     async def publish_product(self) -> None:
         await self.server.async_setValues(self.device_id, FC_HOLDING, R.offset(R.HR_PRODUCT_NO),
