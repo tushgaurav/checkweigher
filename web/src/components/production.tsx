@@ -37,10 +37,17 @@ export function ProductionPanel({
         completeness?.pct != null && (
           <span
             className="num text-[11px] text-muted-foreground"
-            title={`${fmtInt(completeness.received)} of ${fmtInt(completeness.expected)} products counted by the indicator were received`}
+            title={
+              completeness.pct > 100.5
+                ? `${fmtInt(completeness.received)} records for ${fmtInt(completeness.expected)} products counted by the indicator: duplicates`
+                : `${fmtInt(completeness.received)} of ${fmtInt(completeness.expected)} products counted by the indicator were received`
+            }
           >
             Data capture{' '}
-            <span className="font-semibold" style={{ color: completeness.pct >= 99.5 ? 'var(--ok)' : 'var(--over)' }}>
+            <span
+              className="font-semibold"
+              style={{ color: Math.abs(completeness.pct - 100) <= 0.5 ? 'var(--ok)' : 'var(--over)' }}
+            >
               {fmtPct(completeness.pct, 1)}
             </span>
           </span>

@@ -56,6 +56,8 @@ class MachineWorker:
         self._last_ts: datetime | None = None
         self._parse_errors = 0
         self._parse_error_reported = 0.0
+        self._duplicates = 0
+        self._duplicate_reported = 0.0
         self._serial: SerialLineReader | None = None
         self._bg: set[asyncio.Task] = set()
         self._pending: list[WeighingRecord] = []
@@ -136,6 +138,15 @@ class MachineWorker:
                 self._parse_error_reported, self._parse_errors = now, 0
             return
         if ev := self.seq.observe(line.seq):
+            if ev.kind == "duplicate":
+                # The running number identifies one judged product: a repeat is a re-sent line, not a new pack.
+                self._duplicates += 1
+                now = time.monotonic()
+                if now - self._duplicate_reported > 60:
+                    self._event("seq_duplicate", f"dropped {self._duplicates} repeated result line(s) #{ev.current}",
+                                {"count": self._duplicates, "line": text})
+                    self._duplicate_reported, self._duplicates = now, 0
+                return
             if ev.kind == "gap":
                 self._event("seq_gap", f"{ev.missing} result line(s) missed between #{ev.previous} and "
                             f"#{ev.current}", asdict(ev))

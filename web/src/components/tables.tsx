@@ -181,6 +181,7 @@ export function WeighingsPanel({ filters, tz, scope }: { filters: FilterParams; 
 
 const EVENT_TONE: Record<string, string> = {
   seq_gap: 'var(--over)',
+  seq_duplicate: 'var(--over)',
   counter_reset: 'var(--feed)',
   summary_cleared: 'var(--feed)',
   parse_error: 'var(--reject)',

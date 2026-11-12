@@ -42,7 +42,9 @@ indicator ──RS-232C "Weighing Result / Cyclic Print"──> collector ──
   Serial: Output Format offers Cyclic Print; Serial Mode lists Disable / Summary / Stream / Weighing Result & Summary.
   2026-11-12: USB-RS232 adapter on COM7, 115200 8N1; lines match the manual's Cyclic Print format exactly
   (`00058,OK,ST,+0000156.0 g`, 24 chars, CRLF, 1 decimal, g, contiguous running numbers). Only OK lines seen so far.
-  `config.site1.yaml` now runs `serial+modbus`.
+  `config.site1.yaml` now runs `serial+modbus`. Same day the indicator re-sent result line #69 ~588k times and the
+  collector stored every copy; it now drops a line whose running number repeats the previous one (`seq_duplicate`
+  event, rate-limited). Why the indicator repeats is still unknown (check its Serial Mode setting).
 - Block addresses are per-machine config (`modbus.summary_address`, `weighing_result_address`,
   `product_settings_address`, null = not available, plus `decimals` when product settings are unreadable) ->
   `registers.Layout`. Decoding always uses the manual's field order inside a block. The simulator (`--summary-address`
