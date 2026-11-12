@@ -26,10 +26,10 @@ machines:
   - id: 1
     code: "CW-01"
     name: "Checkweigher 1"
-    # Modbus only for now: exact counts per judgement, no target (not readable on this firmware).
-    # When the RS-232 link is in place switch to "serial+modbus" and uncomment the serial section:
-    # every pack's weight from serial, counter cross-check from Modbus.
-    mode: "modbus"
+    # Every pack's weight from serial, counter cross-check ("Data capture %") from Modbus.
+    # No target: product settings are not readable over Modbus on this firmware.
+    # Fallback without the RS-232 link: mode "modbus" (exact counts per judgement, no weights).
+    mode: "serial+modbus"
     unit: "g"
     modbus:
       host: "192.168.0.1"
@@ -49,9 +49,11 @@ machines:
       weighing_result_address: null
       # decimals: 1
       product_settings_address: null   # target / limits are not readable over Modbus on this firmware
-    # serial:
-    #   url: "COM3"   # the port probe.py ports shows; socket://<ip>:<port> for a serial-to-Ethernet converter
-    #   baudrate: 115200   # indicator: Serial Mode = Weighing Result, Output Format = Cyclic Print, 115200 8N1
-    #   bytesize: 8
-    #   parity: "N"
-    #   stopbits: 1
+    serial:
+      # USB-RS232 adapter; verified 2026-11-12 with probe.py serial (manual's Cyclic Print format, CRLF).
+      # Indicator: Serial Mode = Weighing Result, Output Format = Cyclic Print, Preset Tare / 2nd header = Disable.
+      url: "COM7"
+      baudrate: 115200
+      bytesize: 8
+      parity: "N"
+      stopbits: 1

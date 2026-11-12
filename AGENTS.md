@@ -40,6 +40,9 @@ indicator ──RS-232C "Weighing Result / Cyclic Print"──> collector ──
   0 -> 222.6 g (the last product): last weighing result OR live weight - unverified. HR 1-1000 holds no product
   settings (non-zero values match DI settings in Table 19), so target/limits are not readable over Modbus there.
   Serial: Output Format offers Cyclic Print; Serial Mode lists Disable / Summary / Stream / Weighing Result & Summary.
+  2026-11-12: USB-RS232 adapter on COM7, 115200 8N1; lines match the manual's Cyclic Print format exactly
+  (`00058,OK,ST,+0000156.0 g`, 24 chars, CRLF, 1 decimal, g, contiguous running numbers). Only OK lines seen so far.
+  `config.site1.yaml` now runs `serial+modbus`.
 - Block addresses are per-machine config (`modbus.summary_address`, `weighing_result_address`,
   `product_settings_address`, null = not available, plus `decimals` when product settings are unreadable) ->
   `registers.Layout`. Decoding always uses the manual's field order inside a block. The simulator (`--summary-address`
